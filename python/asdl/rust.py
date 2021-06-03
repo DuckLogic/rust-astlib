@@ -751,7 +751,16 @@ def main(input_filename, rust_filename, dump_module=False):
     mod = asdl.parse(input_filename)
     if dump_module:
         print('Parsed Module:')
-        print(mod)
+        try:
+            from prettyprinter import register_pretty, \
+                install_extras, \
+                pprint as pretty_print
+        except ImportError:
+            print("WARN: Failed to import 'prettyprinter'", file=sys.stderr)
+            pretty_print = print
+        else:
+            install_extras()
+        pretty_print(mod)
     if not asdl.check(mod):
         sys.exit(1)
 
