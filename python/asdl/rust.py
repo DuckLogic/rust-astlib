@@ -332,10 +332,16 @@ class AbstractVisitorGenerator(RustVisitor, metaclass=ABCMeta):
             args=args, return_type=return_type
         )
 
-    def visitConstructor(self, cons):
-        visitor = self.constructor_visitor(cons)
+    def visitConstructor(self, cons, name):
+        visitor = self.constructor_visitor(cons, name)
         if visitor is not None:
             self.emit_visitor_method(visitor)
+
+    def visitProduct(self, prod, name):
+        visitor = self.product_visitor(prod, name)
+        if visitor is not None:
+            self.emit_visitor_method(visitor)
+
 
     def constructor_visitor(self, cons: asdl.Constructor) -> Optional[VisitorMethod]:
         return VisitorMethod(
@@ -392,18 +398,36 @@ class AssociatedVisitorType:
         res.append(";")
         out.emit(''.join(res))
 
+class TypeInfo:
+    simple_types: set[str]
+    type_info: dict[str, asdl.Type]
+    def __init__(self):
+        self.simple_types = set()
+        self.type_info = {}
+
+    def is_simple(self, name: str) -> bool:
+        return name in BUILTIN_TYPE_MAP \
+            or name in self.simple_types
+
 class ClarrifyingVisitor(asdl.VisitorBase):
+    info: TypeInfo
+    def __init__(self, info: TypeInfo):
+        super().__init__()
+        assert isinstance(info, TypeInfo)
+        self.info = info
+
     def visitModule(self, mod):
         for d in mod.dfns:
             self.visit(d)
 
     def visitType(self, tp):
+        self.info.type_info[tp.name] = tp
         self.visit(tp.value, tp.name)
 
     def visitSum(self, sum, name):
         sum.name = name
         if is_simple(sum):
-            return
+            self.info.simple_types.add(name)
         for tp in sum.types:
             assert isinstance(tp, asdl.Constructor)
             # Give access to parent
@@ -430,26 +454,33 @@ class GenericVisitorGenerator(AbstractVisitorGenerator):
 
     This is how we avoid constructing an AST."""
     pending_associated_types: dict[str, AssociatedVisitorType]
-    def __init__(self, file):
+    info: TypeInfo
+    def __init__(self, info: TypeInfo, file):
         super().__init__(file)
+        assert isinstance(info, TypeInfo)
+        self.info = info
         self.pending_associated_types = dict()
 
-    def visitModule(self, mod):
-        self.emit("pub trait AstVisitor {")
-        with self.indent():
+    def visitModule(self, mod, emit_trait=True):
+        if emit_trait:
+            self.emit("pub trait AstVisitor {")
+        with self.indent(1 if emit_trait else 0):
             for dfn in mod.dfns:
                 self.visit(dfn)
             self.emit("")
             for associated in self.pending_associated_types.values():
                 associated.write_decl(self)
             self.pending_associated_types.clear()
-        self.emit("}")
+        if emit_trait:
+            self.emit("}")
 
     def arg_type(self, parent: asdl.AST, field: Union[asdl.Field, SharedAttribute]) -> str:
         if isinstance(field, SharedAttribute):
             return field.rust_type
         if field.type in BUILTIN_TYPE_MAP:
             type_name = BUILTIN_TYPE_MAP[field.type]
+        elif self.info.is_simple(field.type):
+            type_name = rust_type(field.type)
         else:
             type_name = f"Self::{rust_type(field.type)}"
         if field.opt:
@@ -503,7 +534,9 @@ class MemoryVisitorGenerator(GenericVisitorGenerator):
         small_fields = []
         big_fields = []
         for arg in args:
-            if "impl Iterator" in arg.rust_type:
+            if "Box" in arg.rust_type:
+                big_fields.append(f"{arg.name}: Box::new({arg.name})")
+            elif "impl Iterator" in arg.rust_type:
                 big_fields.append(f"{arg.name}: {arg.name}.collect::<Vec<_>>()")
             else:
                 small_fields.append(f"{arg.name}")
@@ -538,9 +571,9 @@ class MemoryVisitorGenerator(GenericVisitorGenerator):
         return visitor
 
     def product_visitor(self, product: asdl.Product, name: str):
-        visitor = super().constructor_visitor(cons)
-        cons_name = NameStyle.PASCAL_CASE.convert(cons.name)
-        visitor.body = self.build_struct(f"{parent_name}::{variant_name}", visitor.args)
+        visitor = super().product_visitor(product, name)
+        cons_name = NameStyle.PASCAL_CASE.convert(name)
+        visitor.body = self.build_struct(f"{cons_name}", visitor.args)
         return visitor
 
     def product_assoc_type(self, item: asdl.Product) -> AssociatedVisitorType:
@@ -569,17 +602,14 @@ class MemoryVisitorGenerator(GenericVisitorGenerator):
         self.emit("pub struct MemoryVisitor;")
         self.emit("impl AstVisitor for MemoryVisitor {")
         with self.indent():
-            for dfn in mod.dfns:
-                self.visit(dfn)
-            self.emit("")
-            for associated in self.pending_associated_types.values():
-                associated.write_decl(self)
-            self.pending_associated_types.clear()
+            super().visitModule(mod, emit_trait=False)
         self.emit("}")
 
 class RustTypeDeclareVisitor(RustVisitor):
-    def __init__(self, *args):
+    info: TypeInfo
+    def __init__(self, info: TypeInfo, *args):
         super().__init__(*args)
+        self.info = info
         self.inside_enum = False
 
     @contextmanager
@@ -632,12 +662,13 @@ class RustTypeDeclareVisitor(RustVisitor):
                         self.visit(tp)
                 emit("},")
         emit("}")
-        def emit_match(field):
+        def emit_match(field, *, borrowed=True):
+            ownership_pat = "ref " if borrowed else ""
             emit("match *self {")
             for idx, tp in enumerate(sum.types):
                 with self.indent():
                     last = f"=> {field.name}," if idx == len(sum.types) - 1 else "|"
-                    emit(f"{rust_type(name)}::{tp.name} {{ ref {field.name}, .. }} {last}")
+                    emit(f"{rust_type(name)}::{tp.name} {{ {ownership_pat}{field.name}, .. }} {last}")
             emit("}")
         self.emit_rewritten_attrs(
             sum.attributes,
@@ -648,14 +679,17 @@ class RustTypeDeclareVisitor(RustVisitor):
     def emit_rewritten_attrs(self, attrs, *, name, handler):
         def emit(*args):
             self.emit(*args)
-        def emit_handler(field: SharedAttribute, *, pub=True):
+        def emit_handler(field: SharedAttribute, *, pub=True, borrowed=True):
             attr_type = str(field.rust_type)
             if field.doc is not None:
                 emit(f"/// {field.doc}")
+            result_type = rust_type(attr_type)
+            if borrowed:
+                result_type = "&" + result_type
             vis = "pub " if pub else ""
-            emit(f"{vis}fn {field.name}(&self) -> &{rust_type(attr_type)} {{")
+            emit(f"{vis}fn {field.name}(&self) -> {result_type} {{")
             with self.indent():
-                handler(field)
+                handler(field, borrowed=borrowed)
             emit("}")
         if attrs:
             rewritten_attrs=self.rewrite_attributes(attrs)
@@ -675,7 +709,7 @@ class RustTypeDeclareVisitor(RustVisitor):
                 with self.indent():
                     emit_handler(dataclasses.replace(
                         span_field, doc=None
-                    ), pub=False)
+                    ), pub=False, borrowed=False)
                 emit("}")
 
 
@@ -696,6 +730,9 @@ class RustTypeDeclareVisitor(RustVisitor):
         # XXX need to lookup field.type, because it might be something
         # like a builtin...
         type_name = rust_type(field.type)
+        if not self.info.is_simple(field.type) \
+            and not field.seq:
+            type_name = f"Box<{type_name}>"
         name = field.name
         vis = "pub " if not self.inside_enum else ""
         if field.seq:
@@ -712,8 +749,9 @@ class RustTypeDeclareVisitor(RustVisitor):
                 # rudimentary attribute handling
                 self.emit(f"pub {field.name}: {field.rust_type},");
         self.emit("}")
-        def emit_field_access(field):
-            self.emit(f"&self.{field.name}")
+        def emit_field_access(field, *, borrowed=True):
+            ownership = "&" if borrowed else ""
+            self.emit(f"{ownership}self.{field.name}")
         self.emit_rewritten_attrs(
             product.attributes,
             name=name,
@@ -738,11 +776,12 @@ class ChainOfVisitors:
 
 
 def write_source(mod, f):
+    info = TypeInfo()
     v = ChainOfVisitors(
-        ClarrifyingVisitor(),
-        RustTypeDeclareVisitor(f),
-        GenericVisitorGenerator(f),
-        MemoryVisitorGenerator(f),
+        ClarrifyingVisitor(info=info),
+        RustTypeDeclareVisitor(info, f),
+        GenericVisitorGenerator(info, f),
+        MemoryVisitorGenerator(info, f),
     )
     v.visit(mod)
 
