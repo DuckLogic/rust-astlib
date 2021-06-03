@@ -526,6 +526,8 @@ class GenericVisitorGenerator(AbstractVisitorGenerator):
         return AssociatedVisitorType(rust_type(parent.name))
 
 
+ASSOCIATED_TYPE_PATTERN = re.compile(r"Self::(\w+)")
+OPTIONAL_ASSOCIATED_TYPE_PATTERN = re.compile(r"Option<Self::(\w+)>")
 class MemoryVisitorGenerator(GenericVisitorGenerator):
 
     def build_struct(self, name: str, args: list[VisitorArg]):
@@ -534,8 +536,12 @@ class MemoryVisitorGenerator(GenericVisitorGenerator):
         small_fields = []
         big_fields = []
         for arg in args:
-            if "Box" in arg.rust_type:
+            if (match := ASSOCIATED_TYPE_PATTERN.match(arg.rust_type)) \
+                and not self.info.is_simple(match[1]):
                 big_fields.append(f"{arg.name}: Box::new({arg.name})")
+            elif (match := OPTIONAL_ASSOCIATED_TYPE_PATTERN.match(arg.rust_type)) \
+                and not self.info.is_simple(match[1]):
+                big_fields.append(f"{arg.name}: {arg.name}.map(Box::new)")
             elif "impl Iterator" in arg.rust_type:
                 big_fields.append(f"{arg.name}: {arg.name}.collect::<Vec<_>>()")
             else:
@@ -735,10 +741,12 @@ class RustTypeDeclareVisitor(RustVisitor):
             type_name = f"Box<{type_name}>"
         name = field.name
         vis = "pub " if not self.inside_enum else ""
-        if field.seq:
-            self.emit(f"{vis}{name}: Vec<{type_name}>,")
-        else:
-            self.emit(f"{vis}{name}: {type_name},")
+        if field.opt:
+            assert not field.seq, repr(field)
+            type_name = f"Option<{type_name}>"
+        elif field.seq:
+            type_name = f"Vec<{type_name}>"
+        self.emit(f"{vis}{name}: {type_name},")
 
     def visitProduct(self, product, name):
         self.emit(f"pub struct {rust_type(name)} {{")
