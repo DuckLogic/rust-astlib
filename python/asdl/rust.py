@@ -644,7 +644,7 @@ class RustTypeDeclareVisitor(RustVisitor):
             enum.append(f"{tp.name}={i + 1},")
         type_name = rust_type(name)
         self.emit("#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]")
-        self.emit(f"enum {type_name} {{")
+        self.emit(f"pub enum {type_name} {{")
         with self.indent():
             for line in enum:
                 self.emit(line)
