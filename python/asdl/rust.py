@@ -643,6 +643,7 @@ class RustTypeDeclareVisitor(RustVisitor):
         for i, tp in enumerate(sum.types):
             enum.append(f"{tp.name}={i + 1},")
         type_name = rust_type(name)
+        self.emit("#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]")
         self.emit(f"enum {type_name} {{")
         with self.indent():
             for line in enum:
@@ -653,6 +654,8 @@ class RustTypeDeclareVisitor(RustVisitor):
     def sum_with_constructors(self, sum, name):
         def emit(s):
             self.emit(s)
+        emit("#[derive(Educe, Debug, Clone)]")
+        emit("#[educe(PartialEq, Eq, Hash)]")
         emit(f"pub enum {rust_type(name)} {{")
         with self.indent():
             for idx, tp in enumerate(sum.types):
@@ -663,6 +666,8 @@ class RustTypeDeclareVisitor(RustVisitor):
                         attr_type = field.rust_type
                         if field.doc is not None:
                             emit(f"/// {field.doc}")
+                        self.emit('#[educe(Hash(ignore))]')
+                        self.emit('#[educe(PartialEq(ignore))]')
                         emit(f"{field.name}: {attr_type},")
                     with self.switch_inside_enum(True):
                         self.visit(tp)
@@ -724,6 +729,8 @@ class RustTypeDeclareVisitor(RustVisitor):
             amount = 0
             if not self.inside_enum:
                 amount = 1
+                self.emit("#[derive(Educe, Debug, Clone)]")
+                self.emit("#[educe(PartialEq, Eq, Hash)]")
                 self.emit(f"pub struct {cons.name} {{")
             with self.indent(amount):
                 for f in cons.fields:
@@ -749,12 +756,16 @@ class RustTypeDeclareVisitor(RustVisitor):
         self.emit(f"{vis}{name}: {type_name},")
 
     def visitProduct(self, product, name):
+        self.emit("#[derive(Educe, Debug, Clone)]")
+        self.emit("#[educe(PartialEq, Eq, Hash)]")
         self.emit(f"pub struct {rust_type(name)} {{")
         with self.indent():
             for f in product.fields:
                 self.visit(f)
             for field in self.rewrite_attributes(product.attributes):
                 # rudimentary attribute handling
+                self.emit('#[educe(Hash(ignore))]')
+                self.emit('#[educe(PartialEq(ignore))]')
                 self.emit(f"pub {field.name}: {field.rust_type},");
         self.emit("}")
         def emit_field_access(field, *, borrowed=True):
