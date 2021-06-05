@@ -407,6 +407,7 @@ class TypeInfo:
 
     def is_simple(self, name: str) -> bool:
         return name in BUILTIN_TYPE_MAP \
+            or name in ("Ident", "Constant") \
             or name in self.simple_types
 
 class ClarrifyingVisitor(asdl.VisitorBase):
@@ -448,6 +449,12 @@ class ClarrifyingVisitor(asdl.VisitorBase):
         for f in cons.fields:
             self.visitField(f)
 
+ARG_TYPE_BUILTINS = {
+    "identifier": "Self::Ident",
+    "string": "&'a str",
+    "int": "i32",
+    "constant": "Self::Constant"
+}
 class GenericVisitorGenerator(AbstractVisitorGenerator):
     """Generate a generic visitor,
     completely generic over result types (via associated types).
@@ -463,7 +470,10 @@ class GenericVisitorGenerator(AbstractVisitorGenerator):
 
     def visitModule(self, mod, emit_trait=True):
         if emit_trait:
-            self.emit("pub trait AstVisitor {")
+            self.emit("pub trait AstVisitor<'a>: ConstantVisitor<'a> {")
+            with self.indent():
+                self.emit("type Ident;")
+                self.emit("fn visit_ident(&mut self, span: Span, ident: RawIdent<'a>) -> Self::Ident;")
         with self.indent(1 if emit_trait else 0):
             for dfn in mod.dfns:
                 self.visit(dfn)
@@ -478,7 +488,7 @@ class GenericVisitorGenerator(AbstractVisitorGenerator):
         if isinstance(field, SharedAttribute):
             return field.rust_type
         if field.type in BUILTIN_TYPE_MAP:
-            type_name = BUILTIN_TYPE_MAP[field.type]
+            type_name = ARG_TYPE_BUILTINS[field.type]
         elif self.info.is_simple(field.type):
             type_name = rust_type(field.type)
         else:
@@ -527,7 +537,7 @@ class GenericVisitorGenerator(AbstractVisitorGenerator):
 
 
 ASSOCIATED_TYPE_PATTERN = re.compile(r"Self::(\w+)")
-OPTIONAL_ASSOCIATED_TYPE_PATTERN = re.compile(r"Option<Self::(\w+)>")
+OPTIONAL_PATTERN = re.compile(r"Option<(.+)>")
 class MemoryVisitorGenerator(GenericVisitorGenerator):
 
     def build_struct(self, name: str, args: list[VisitorArg]):
@@ -535,15 +545,33 @@ class MemoryVisitorGenerator(GenericVisitorGenerator):
         res.append(f"{name} {{")
         small_fields = []
         big_fields = []
-        for arg in args:
-            if (match := ASSOCIATED_TYPE_PATTERN.match(arg.rust_type)) \
+        def transform_arg(arg: VisitorArg):
+            if (match := OPTIONAL_PATTERN.match(arg.rust_type)):
+                inner = transform_arg(VisitorArg(
+                    name="dummy",
+                    rust_type=match[1]
+                ))
+                if inner is None:
+                    return None
+                elif inner.startswith("Box::new"):
+                    return f"{arg.name}.map(Box::new)"
+                elif inner.startswith("String::from"):
+                    return f"{arg.name}.map(String::from)"
+                else:
+                    raise AssertionError(f"{inner!r} for {arg!r}")
+            elif arg.rust_type == "&'a str":
+                return f"String::from({arg.name})"
+            elif (match := ASSOCIATED_TYPE_PATTERN.match(arg.rust_type)) \
                 and not self.info.is_simple(match[1]):
-                big_fields.append(f"{arg.name}: Box::new({arg.name})")
-            elif (match := OPTIONAL_ASSOCIATED_TYPE_PATTERN.match(arg.rust_type)) \
-                and not self.info.is_simple(match[1]):
-                big_fields.append(f"{arg.name}: {arg.name}.map(Box::new)")
+                return f"Box::new({arg.name})"
             elif "impl Iterator" in arg.rust_type:
-                big_fields.append(f"{arg.name}: {arg.name}.collect::<Vec<_>>()")
+                return f"{arg.name}.collect::<Vec<_>>()"
+            else:
+                return None
+        for arg in args:
+            transform = transform_arg(arg)
+            if transform is not None:
+                big_fields.append(f"{arg.name}: {transform}")
             else:
                 small_fields.append(f"{arg.name}")
         with self.indent():
@@ -606,8 +634,13 @@ class MemoryVisitorGenerator(GenericVisitorGenerator):
 
     def visitModule(self, mod):
         self.emit("pub struct MemoryVisitor;")
-        self.emit("impl AstVisitor for MemoryVisitor {")
+        self.emit("impl<'a> AstVisitor<'a> for MemoryVisitor {")
         with self.indent():
+            self.emit("type Ident = Ident;")
+            self.emit("fn visit_ident(&mut self, span: Span, raw: RawIdent<'a>) -> Ident {")
+            with self.indent():
+                self.emit("Ident::new(span, raw.text())")
+            self.emit("}")
             super().visitModule(mod, emit_trait=False)
         self.emit("}")
 
