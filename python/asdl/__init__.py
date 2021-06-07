@@ -22,6 +22,7 @@
 from __future__ import annotations
 from collections import namedtuple
 import re
+import sys
 
 __all__ = [
     'builtin_types', 'parse', 'AST', 'Module', 'Type', 'Constructor',
@@ -35,8 +36,47 @@ __all__ = [
 # between the various node types.
 from dataclasses import dataclass, field
 from abc import ABCMeta, abstractmethod
+from enum import Enum
 
-builtin_types = {'identifier', 'string', 'int', 'constant'}
+class AsdlType:
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        if type(self) is AsdlType:
+            # NOTE: Can't use ABCMeta because of Enum :(
+            raise NotImplementedError("Abstract class")
+
+    @staticmethod
+    def from_name(name: str) -> AsdlType:
+        assert isinstance(name, str)
+        try:
+            return BuiltinType(name)
+        except ValueError:
+            return SimpleType(name)
+
+@dataclass(frozen=True)
+class SimpleType(AsdlType):
+    name: str
+
+    def __str__(self) -> str:
+        return self.name
+
+class BuiltinType(AsdlType, Enum):
+    IDENTIFIER = 'identifier'
+    STRING = 'string'
+    INT = 'int'
+    CONSTANT = 'constant'
+
+    def __str__(self) -> str:
+        return self.value
+
+@dataclass(frozen=True)
+class TupleType(AsdlType):
+    element_types: tuple[AsdlType, ...]
+    def __post_init__(self):
+        assert len(self.element_types) > 0
+
+    def __str__(self) -> str:
+        return f"({', '.join(map(str, self.element_types))})"
 
 @dataclass
 class AST(metaclass=ABCMeta):
@@ -67,7 +107,7 @@ class Constructor(AST):
 
 @dataclass
 class Field(AST):
-    type: Type
+    type: AsdlType
     name: str = None
     seq: bool = False
     opt: bool = False
@@ -160,7 +200,13 @@ class Check(VisitorBase):
             self.visit(f, key)
 
     def visitField(self, field, name):
-        key = str(field.type)
+        if isinstance(field.type, (SimpleType, BuiltinType)):
+            field_type_name = str(field.type)
+        elif isinstance(field.type, TupleType):
+            return # Skip over this
+        else:
+            raise TypeError(field.type)
+        key = field_type_name
         l = self.types.setdefault(key, [])
         l.append(name)
 
@@ -177,11 +223,27 @@ def check(mod):
     v = Check()
     v.visit(mod)
 
+    def check_defined_type(t: AsdlType):
+        if isinstance(t, BuiltinType):
+            return
+        elif isinstance(t, TupleType):
+            for element_type in t.element_types:
+                check_defined_type(element_type)
+        elif isinstance(t, SimpleType):
+            if t.name not in mod.types:
+                v.errors += 1
+                uses = ", ".join(v.types[t.name])
+                print(
+                    f"Undefined type {t},",
+                    f"used in {uses}",
+                    file=sys.stderr
+                )
+        else:
+            raise AssertionError(f"Unexpected type: {t!r}")
+
     for t in v.types:
-        if t not in mod.types and not t in builtin_types:
-            v.errors += 1
-            uses = ", ".join(v.types[t])
-            print('Undefined type {}, used in {}'.format(t, uses))
+        assert isinstance(t, str), repr(t)
+        check_defined_type(AsdlType.from_name(t))
     return not v.errors
 
 # The ASDL parser itself comes next. The only interesting external interface
@@ -194,14 +256,22 @@ def parse(filename):
         return parser.parse(f.read())
 
 # Types for describing tokens in an ASDL specification.
-class TokenKind:
+class TokenKind(Enum):
     """TokenKind is provides a scope for enumerated token kinds."""
-    (ConstructorId, TypeId, Equals, Comma, Question, Pipe, Asterisk,
-     LParen, RParen, LBrace, RBrace) = range(11)
+    ConstructorId = 0
+    TypeId = 1
+    Equals = '='
+    Comma = ','
+    Question = '?'
+    Pipe = '|'
+    Asterisk = '*'
+    LParen = '('
+    RParen = ')'
+    LBrace = '{'
+    RBrace = '}'
+    LEFT_BRACKET = '['
+    RIGHT_BRACKET = ']'
 
-    operator_table = {
-        '=': Equals, ',': Comma,    '?': Question, '|': Pipe,    '(': LParen,
-        ')': RParen, '*': Asterisk, '{': LBrace,   '}': RBrace}
 
 Token = namedtuple('Token', 'kind value lineno')
 
@@ -230,9 +300,9 @@ def tokenize_asdl(buf):
             else:
                 # Operators
                 try:
-                    op_kind = TokenKind.operator_table[c]
-                except KeyError:
-                    raise ASDLSyntaxError('Invalid operator %s' % c, lineno)
+                    op_kind = TokenKind(c)
+                except ValueError:
+                    raise ASDLSyntaxError(f'Invalid operator {c!r}', lineno)
                 yield Token(op_kind, c, lineno)
 
 class ASDLParser:
@@ -298,17 +368,44 @@ class ASDLParser:
         fields = []
         self._match(TokenKind.LParen)
         while self.cur_token.kind == TokenKind.TypeId:
-            typename = self._advance()
+            asdl_type = self._parse_asdl_type()
+            assert isinstance(asdl_type, AsdlType), repr(asdl_type)
             is_seq, is_opt = self._parse_optional_field_quantifier()
             id = (self._advance() if self.cur_token.kind in self._id_kinds
                                   else None)
-            fields.append(Field(typename, id, seq=is_seq, opt=is_opt))
+            fields.append(Field(asdl_type, id, seq=is_seq, opt=is_opt))
             if self.cur_token.kind == TokenKind.RParen:
                 break
             elif self.cur_token.kind == TokenKind.Comma:
                 self._advance()
         self._match(TokenKind.RParen)
         return fields
+
+    def _parse_asdl_type(self) -> AsdlType:
+        name = self._advance()
+        assert isinstance(name, str), repr(name)
+        try:
+            return BuiltinType(name)
+        except ValueError:
+            pass
+        if name == "tuple":
+            self._advance()
+            element_types = []
+            while True:
+                element_types.append(
+                    self._parse_asdl_type()
+                )
+                if self.cur_token.kind == TokenKind.Comma:
+                    self._advance()
+                elif self.cur_token.kind == TokenKind.RIGHT_BRACKET:
+                    break
+                else:
+                    raise ASDLSyntaxError(f"Unexpected token {self.cur_token!r}")
+            assert self.cur_token.kind == TokenKind.RIGHT_BRACKET
+            self._advance()
+            return TupleType(tuple(element_types))
+        else:   
+            return SimpleType(name=name)
 
     def _parse_optional_fields(self):
         if self.cur_token.kind == TokenKind.LParen:

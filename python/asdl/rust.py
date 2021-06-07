@@ -72,15 +72,19 @@ class NameStyle(Enum):
             raise AssertionError(repr(self))
 
 
-def rust_type(name):
+def rust_type(tp):
     """Return a string for the Rust name of the type.
 
     This function special cases the default types provided by asdl.
     """
-    if name in BUILTIN_TYPE_MAP:
-        return BUILTIN_TYPE_MAP[name]
-    else:
-        return NameStyle.PASCAL_CASE.convert(name)
+    if isinstance(tp, str):
+        return rust_type(asdl.AsdlType.from_name(tp))
+    elif isinstance(tp, asdl.BuiltinType):
+        return BUILTIN_TYPE_MAP[str(tp)]
+    elif isinstance(tp, asdl.SimpleType):
+        return NameStyle.PASCAL_CASE.convert(tp.name)
+    elif isinstance(tp, asdl.TupleType):
+        return f"({', '.join(map(rust_type, tp.element_types))},)"
 
 def reflow_lines(s, depth):
     """Reflow the line s indented depth tabs.
@@ -211,7 +215,7 @@ class RustVisitor(EmitVisitor, metaclass=ABCMeta):
             assert "span" not in attr_map, attr_map["span"]
             for name in SPAN_ATTRS:
                 actual = attr_map[name]
-                assert actual.type == "int", \
+                assert actual.type == asdl.BuiltinType.INT, \
                     f"Unexpected attr {actual!r}"
                 del attr_map[name]
             res["span"] = SharedAttribute(
@@ -405,7 +409,9 @@ class TypeInfo:
         self.simple_types = set()
         self.type_info = {}
 
-    def is_simple(self, name: str) -> bool:
+    def is_simple(self, name: Union[str, asdl.AsdlType]) -> bool:
+        if isinstance(name, asdl.AsdlType):
+            return self.is_simple(str(name))
         return name in BUILTIN_TYPE_MAP \
             or name in ("Ident", "Constant") \
             or name in self.simple_types
@@ -487,12 +493,18 @@ class GenericVisitorGenerator(AbstractVisitorGenerator):
     def arg_type(self, parent: asdl.AST, field: Union[asdl.Field, SharedAttribute]) -> str:
         if isinstance(field, SharedAttribute):
             return field.rust_type
-        if field.type in BUILTIN_TYPE_MAP:
-            type_name = ARG_TYPE_BUILTINS[field.type]
-        elif self.info.is_simple(field.type):
-            type_name = rust_type(field.type)
-        else:
-            type_name = f"Self::{rust_type(field.type)}"
+        assert isinstance(field.type, asdl.AsdlType), repr(field)
+        def type_name_for(tp: asdl.AsdlType):
+            if isinstance(tp, asdl.TupleType):
+                return '(' + ', '.join(map(type_name_for, field.type.element_types)) + ')'
+            elif isinstance(tp, asdl.BuiltinType):
+                type_name = ARG_TYPE_BUILTINS[field.type.value]
+            elif self.info.is_simple(tp):
+                type_name = rust_type(tp)
+            else:
+                type_name = f"Self::{rust_type(tp)}"
+            return type_name
+        type_name = type_name_for(field.type)
         if field.opt:
             assert not field.seq
             return f"Option<{type_name}>"
