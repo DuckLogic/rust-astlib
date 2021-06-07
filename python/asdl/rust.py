@@ -6,6 +6,7 @@ import sys
 import textwrap
 import re
 import dataclasses
+import click
 
 from abc import ABCMeta, abstractmethod
 from typing import Union, Optional
@@ -839,17 +840,42 @@ class ChainOfVisitors:
                 v.emit("")
 
 
-def write_source(mod, f):
+class GeneratorMode(Enum):
+    AST = 'ast'
+    VISITOR_TRAIT = 'visitor-decl'
+    MEMORY_VISITOR_IMPL = 'ast-visitor-impl'
+
+def write_source(mod, f, modes: list[GeneratorMode]):
     info = TypeInfo()
-    v = ChainOfVisitors(
-        ClarrifyingVisitor(info=info),
-        RustTypeDeclareVisitor(info, f),
-        GenericVisitorGenerator(info, f),
-        MemoryVisitorGenerator(info, f),
-    )
+    visitors = [
+        ClarrifyingVisitor(info),
+    ]
+    for mode in modes:
+        if mode == GeneratorMode.AST:
+            visitors.append(RustTypeDeclareVisitor(info, f))
+        elif mode == GeneratorMode.VISITOR_TRAIT:
+            visitors.append(GenericVisitorGenerator(info, f))
+        elif mode == GeneratorMode.MEMORY_VISITOR_IMPL:
+            visitors.append(MemoryVisitorGenerator(info, f))
+        else:
+            raise AssertionError(repr(mode))
+    v = ChainOfVisitors(*visitors)
     v.visit(mod)
 
-def main(input_filename, rust_filename, dump_module=False):
+@click.command()
+@click.argument('input-filename')
+@click.option('--rust-file', '-R', 'rust_filename', type=click.Path(), required=True)
+@click.option('--dump-module', '-D', is_flag=True)
+@click.option(
+    '--mode', '-m', 'mode_names',
+    help="The mode of operation, specifying what to generate (default: only AST)",
+    type=click.Choice(tuple(mode.value for mode in GeneratorMode)),
+    default=("ast",), multiple=True
+)
+def generate(input_filename, rust_filename, mode_names=('ast',), dump_module=False):
+    input_filename = Path(input_filename)
+    rust_filename = Path(rust_filename)
+    modes = [GeneratorMode(name) for name in mode_names]
     auto_gen_msg = AUTOGEN_MESSAGE.format("/".join(Path(__file__).parts[-2:]))
     mod = asdl.parse(input_filename)
     if dump_module:
@@ -870,16 +896,9 @@ def main(input_filename, rust_filename, dump_module=False):
     with rust_filename.open("w") as rust_file:
         rust_file.write(auto_gen_msg)
 
-        write_source(mod, rust_file)
+        write_source(mod, rust_file, modes=modes)
 
     print(f"{rust_filename}, regenerated.")
 
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("input_file", type=Path)
-    parser.add_argument("-R", "--rust-file", type=Path, required=True)
-    parser.add_argument("-d", "--dump-module", action="store_true")
-
-    args = parser.parse_args()
-    main(args.input_file, args.rust_file, args.dump_module)
-
+    generate()
