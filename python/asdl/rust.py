@@ -690,7 +690,7 @@ class RustTypeDeclareVisitor(RustVisitor):
             enum.append(f"{tp.name}={i + 1},")
         type_name = rust_type(name)
         self.emit("#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]")
-        self.emit(f"pub enum {type_name} {{")
+        self.emit(f"pub enum {type_name}<'a> {{")
         with self.indent():
             for line in enum:
                 self.emit(line)
@@ -702,7 +702,7 @@ class RustTypeDeclareVisitor(RustVisitor):
             self.emit(s)
         emit("#[derive(Educe, Debug, Clone)]")
         emit("#[educe(PartialEq, Eq, Hash)]")
-        emit(f"pub enum {rust_type(name)} {{")
+        emit(f"pub enum {rust_type(name)}<'a> {{")
         with self.indent():
             for idx, tp in enumerate(sum.types):
                 emit(f"{tp.name} {{")
@@ -756,13 +756,13 @@ class RustTypeDeclareVisitor(RustVisitor):
                     span_field=field
                     rewritten_attrs.remove(field)
             if rewritten_attrs:
-                emit(f"impl {rust_type(name)} {{")
+                emit(f"impl<'a> {rust_type(name)}<'a> {{")
                 with self.indent():
                     for field in rewritten_attrs:
                         emit_handler(field)
                 emit("}")
             if span_field is not None:
-                emit(f"impl Spanned for {rust_type(name)} {{")
+                emit(f"impl<'a> Spanned for {rust_type(name)}<'a> {{")
                 with self.indent():
                     emit_handler(dataclasses.replace(
                         span_field, doc=None
@@ -777,7 +777,7 @@ class RustTypeDeclareVisitor(RustVisitor):
                 amount = 1
                 self.emit("#[derive(Educe, Debug, Clone)]")
                 self.emit("#[educe(PartialEq, Eq, Hash)]")
-                self.emit(f"pub struct {cons.name} {{")
+                self.emit(f"pub struct {cons.name}<'a> {{")
             with self.indent(amount):
                 for f in cons.fields:
                     self.visit(f)
@@ -791,20 +791,20 @@ class RustTypeDeclareVisitor(RustVisitor):
         type_name = rust_type(field.type)
         if not self.info.is_simple(field.type) \
             and not field.seq:
-            type_name = f"Box<{type_name}>"
+            type_name = f"&'a {type_name}<'a>"
         name = field.name
         vis = "pub " if not self.inside_enum else ""
         if field.opt:
             assert not field.seq, repr(field)
             type_name = f"Option<{type_name}>"
         elif field.seq:
-            type_name = f"Vec<{type_name}>"
+            type_name = f"&'a [{type_name}]"
         self.emit(f"{vis}{name}: {type_name},")
 
     def visitProduct(self, product, name):
         self.emit("#[derive(Educe, Debug, Clone)]")
         self.emit("#[educe(PartialEq, Eq, Hash)]")
-        self.emit(f"pub struct {rust_type(name)} {{")
+        self.emit(f"pub struct {rust_type(name)}<'a> {{")
         with self.indent():
             for f in product.fields:
                 self.visit(f)
