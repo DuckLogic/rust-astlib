@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 
-from .. import asdl
+import asdl
 
 TABSIZE = 4
 MAX_COL = 100
