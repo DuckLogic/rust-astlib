@@ -1,0 +1,9 @@
+[package]
+name = "astlib"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A libary for generating (and manipulating) abstract syntax trees (AST) using ASDL descriptions."
+repository = "https://github.com/DuckLogic/rust-astlib"
+
+[dependencies]
