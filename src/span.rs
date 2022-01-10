@@ -1,4 +1,6 @@
 mod sealed {
+    use std::hash::Hash;
+    use std::fmt::Debug;
     /// Implementation detail: A `Span` type.
     ///
     /// Right now this is an implementation detail.
@@ -6,14 +8,20 @@ mod sealed {
     /// All methods on this trait should be available in all implementations.
     pub trait ISpan: Copy + Debug + Eq + Hash + 'static {
         /// Create a marker span, indicating that location information is missing.
-        pub fn missing() -> Self;
+        fn missing() -> Self;
         /// Create a span from the specified byte indices
-        pub fn from_byte_indices(start: u64, end: u64) -> Self;
+        fn from_byte_indices(start: u64, end: u64) -> Self;
         /// Resolve the start index of this span.
-        pub fn start_index(&self) -> usize;
+        fn start_index(&self) -> usize;
         /// Resolve the end index of this span.
-        pub fn end_index(&self) -> usize;
+        fn end_index(&self) -> usize;
     }
+}
+/// Indicates that a type is associated with a [Span]
+///
+/// This is required of all [ast nodes](crate::AstNode)
+pub trait Spanned {
+    fn span(&self) -> Span;
 }
 
 pub use self::backend::Span;
@@ -28,6 +36,7 @@ pub mod backend {
 #[doc(hidden)]
 pub mod backend {
     use super::sealed::ISpan;
+    use inherent::inherent;
     #[cfg(feature = "serde")]
     use serde::{Serialize, Deserialize};
     /// The default implementation of a span.
@@ -46,7 +55,7 @@ pub mod backend {
         #[inline]
         pub fn from_byte_indices(start: u64, end: u64) -> Self {
             assert!(start <= end);
-            Span { start, end }
+            Span { start: start as usize, end: end as usize }
         }
         #[inline]
         pub fn start_index(&self) -> usize {

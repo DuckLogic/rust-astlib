@@ -8,23 +8,24 @@ keywords = ["asdl", "parsing"]
 repository = "https://github.com/DuckLogic/rust-astlib"
 
 [dependencies]
+derivative = "2"
 serde = { version = "1", optional = true, features = ["derive"] }
 codespan = { version = "0.11", optional = true }
 inherent = "1"
-lexpr = { version = "0.2", optional = true }
-# Implementation detail: We use serde to map AST -> lexpr
-serde-lexpr = { version = "0.2", optional = true }
+lexpr = { version = "0.2" }
 # Used for Ident
 kstring = { version = "1", optional = true }
+# Used for float
+ordered-float = "2"
 
 [features]
-default = ["lisp", "builtins"]
-# Support for pretty-printing AST nodes as lisp expressions
-#
-# NOTE: Unfortunately, this currently relies on `serde`
-lisp = ["lexpr", "serde-lexpr", "serde-1"]
+default = ["builtins"]
 builtins = ["kstring"]
-serde-1 = ["serde"]
+serde1 = ["serde", "kstring/serde"]
 
 [workspace]
-include = ["lib/**"]
+members = ["lib/*"]
+
+[dev-dependencies]
+derivative = "2"
+serde = { version = "1", features = ["derive"] }

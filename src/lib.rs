@@ -1,4 +1,6 @@
 #![doc = include_str!("../README.md")]
+use std::hash::Hash;
+use std::fmt::Debug;
 
 #[cfg(feature = "builtins")]
 pub mod builtins;
@@ -10,17 +12,23 @@ mod builtins {
 
 
 mod span;
+pub mod lisp;
 
-pub use self::span::Span;
+pub use self::span::{Span, Spanned};
 
-/// Indicates that a type is associated with a [Span]
-///
-/// This is required of all [AstNode]s
-pub trait Spanned {
-    /// 
-    fn span(&self) -> Span;
-}
-
-pub trait AstNode: Clone + Eq {
+pub trait AstNode: Clone + Eq + Hash + Debug + MaybeSerialize + lisp::PrintLisp {
 
 }
+
+/// Indicates a type conditionally supports serde Serialization
+#[cfg(feature = "serde1")]
+pub trait MaybeSerialize: Serialize {}
+#[cfg(feature = "serde1")]
+impl<T: serde::Serialize + ?Sized> MaybeSerialize for T {}
+/// Indicates a type conditionally supports serde Serialization
+#[cfg(not(feature = "serde1"))]
+pub trait MaybeSerialize {
+
+}
+#[cfg(not(feature = "serde1"))]
+impl<T: ?Sized> MaybeSerialize for T {}
