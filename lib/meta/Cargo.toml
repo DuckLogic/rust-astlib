@@ -6,3 +6,5 @@ license = "MIT"
 description = "Automatically generates ASTs, based off an ASDL description (see main `astlib` crate for details)."
 keywords = ["asdl", "parsing"]
 
+[build-dependencies]
+parol = "0.5.5"

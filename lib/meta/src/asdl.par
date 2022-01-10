@@ -1,0 +1,38 @@
+%start Module
+%title "The ASDL Grammar"
+%comment "Based off the EBNF in CPython's asdl.py file"
+%line_comment "--"
+
+/*
+ * Based directly on the EBNF in the CPython repo's asdl.py file.
+ *
+ * See here: https://github.com/python/cpython/blob/v3.10.0/Parser/asdl.py#L5-L20
+ *
+ * Changes from the original: "Extended to support modules and attributes after a product"
+ */
+
+%%
+
+Module : "module" Identifier "\{" Definitions "\}";
+
+Definitions: { Identifier "=" TypeDecl };
+
+TypeDecl: ProductDecl | SumDecl;
+
+ProductDecl: Fields ["attributes" Fields];
+
+Fields: "\(" { Field "," } Field "\)";
+Field: Type [Identifier];
+
+Type: Identifier [ "[\?\*]" ];
+
+SumDecl: ConstructorDecl { "|" ConstructorDecl } ["attributes" Fields];
+ConstructorDecl: Identifier [ Fields ];
+
+// From the Parol grammar 
+
+Identifier
+    : "[a-zA-Z_][a-zA-Z0-9_]*"
+    ;
+
+    
