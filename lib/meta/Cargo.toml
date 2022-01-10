@@ -1,0 +1,8 @@
+[package]
+name = "astlib-meta"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Automatically generates ASTs, based off an ASDL description (see main `astlib` crate for details)."
+keywords = ["asdl", "parsing"]
+

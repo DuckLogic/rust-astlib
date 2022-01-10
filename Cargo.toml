@@ -3,7 +3,28 @@ name = "astlib"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "A libary for generating (and manipulating) abstract syntax trees (AST) using ASDL descriptions."
+description = "A libary for auto-generating and manipulating abstract syntax trees (AST), independent of any particular parser generator/framework."
+keywords = ["asdl", "parsing"]
 repository = "https://github.com/DuckLogic/rust-astlib"
 
 [dependencies]
+serde = { version = "1", optional = true, features = ["derive"] }
+codespan = { version = "0.11", optional = true }
+inherent = "1"
+lexpr = { version = "0.2", optional = true }
+# Implementation detail: We use serde to map AST -> lexpr
+serde-lexpr = { version = "0.2", optional = true }
+# Used for Ident
+kstring = { version = "1", optional = true }
+
+[features]
+default = ["lisp", "builtins"]
+# Support for pretty-printing AST nodes as lisp expressions
+#
+# NOTE: Unfortunately, this currently relies on `serde`
+lisp = ["lexpr", "serde-lexpr", "serde-1"]
+builtins = ["kstring"]
+serde-1 = ["serde"]
+
+[workspace]
+include = ["lib/**"]
