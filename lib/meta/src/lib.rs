@@ -5,6 +5,9 @@
 //!
 //! This is only a build dependency, not a runtime depdency.
 
+#[path = "bootstrap_ast.rs"]
+mod ast;
+
 pub struct AstConfig {
     
 }
